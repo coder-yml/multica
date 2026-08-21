@@ -1,0 +1,56 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out fork main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Reset main to upstream and preserve this workflow
+        shell: bash
+        env:
+          upstream_repo: multica-ai/multica
+          workflow_path: .github/workflows/sync-upstream.yml
+        run: |
+          set -euo pipefail
+
+          workflow_backup="$(mktemp)"
+          trap 'rm -f "$workflow_backup"' EXIT
+          cp "$workflow_path" "$workflow_backup"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${upstream_repo}.git"
+          git fetch --prune origin main
+          git fetch --prune upstream main
+
+          upstream_sha="$(git rev-parse upstream/main)"
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1 \
+            && [ "$(git rev-parse HEAD^)" = "$upstream_sha" ]; then
+            echo "Fork main is already synchronized with upstream."
+            exit 0
+          fi
+
+          git reset --hard "$upstream_sha"
+          mkdir -p "$(dirname "$workflow_path")"
+          cp "$workflow_backup" "$workflow_path"
+          git add "$workflow_path"
+          git commit -m "chore: sync main with ${upstream_repo}"
+          git push --force-with-lease origin HEAD:main
